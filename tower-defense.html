@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Grid-Based Tower Defense Game with Timer and Progressive Difficulty</title>
+    <style>
+        canvas {
+            background-color: #eee;
+            display: block;
+            margin: 0 auto;
+            border: 1px solid #000;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="640" height="480"></canvas>
+
+    <script>
+        var canvas = document.getElementById('gameCanvas');
+        var ctx = canvas.getContext('2d');
+
+        var gridSize = 40; // Size of each grid cell
+        var gridWidth = canvas.width / gridSize;
+        var gridHeight = canvas.height / gridSize;
+
+        // Initialize grid
+        var grid = [];
+        for (var x = 0; x < gridWidth; x++) {
+            grid[x] = [];
+            for (var y = 0; y < gridHeight; y++) {
+                grid[x][y] = null; // Empty cell
+            }
+        }
+
+        var towers = [];
+        var enemies = [];
+        var bullets = [];
+
+        var lives = 10;
+        var money = 150;
+
+        var enemySpawnInterval = 2000; // Spawn an enemy every 2 seconds
+        var lastEnemySpawnTime = Date.now();
+
+        // Timer variables
+        var startTime = Date.now();
+        var elapsedTime = 0;
+
+        // Enemy strength increase interval
+        var difficultyIncreaseInterval = 30000; // Every 30 seconds
+        var lastDifficultyIncreaseTime = Date.now();
+
+        // Enemy stats
+        var enemyBaseHealth = 10;
+        var enemyBaseSpeed = 1;
+
+        // Define the path as grid coordinates
+        var path = [
+            { x: 0, y: 6 },
+            { x: 15, y: 6 }
+        ];
+
+        // Tower selection
+        var selectedTowerType = 'basic'; // 'basic' or 'advanced'
+
+        function Enemy() {
+            this.x = path[0].x * gridSize + gridSize / 2;
+            this.y = path[0].y * gridSize + gridSize / 2;
+            this.speed = enemyBaseSpeed;
+            this.health = enemyBaseHealth;
+            this.maxHealth = this.health;
+            this.pathIndex = 0;
+        }
+
+        function Tower(gridX, gridY, type) {
+            this.gridX = gridX;
+            this.gridY = gridY;
+            this.x = gridX * gridSize + gridSize / 2;
+            this.y = gridY * gridSize + gridSize / 2;
+            this.type = type;
+            if (type === 'basic') {
+                this.range = 100;
+                this.fireRate = 1000; // Fires every second
+                this.damage = 5;
+            } else if (type === 'advanced') {
+                this.range = 120;
+                this.fireRate = 800; // Fires every 0.8 seconds
+                this.damage = 10;
+            }
+            this.lastShotTime = 0;
+        }
+
+        function gameLoop() {
+            var now = Date.now();
+            update(now);
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+
+        function update(now) {
+            // Update elapsed time
+            elapsedTime = Math.floor((now - startTime) / 1000);
+
+            // Increase difficulty every 30 seconds
+            if (now - lastDifficultyIncreaseTime > difficultyIncreaseInterval) {
+                enemyBaseHealth += 5; // Increase enemy health
+                enemyBaseSpeed += 0.2; // Increase enemy speed
+                lastDifficultyIncreaseTime = now;
+            }
+
+            // Spawn enemies
+            if (now - lastEnemySpawnTime > enemySpawnInterval) {
+                enemies.push(new Enemy());
+                lastEnemySpawnTime = now;
+            }
+
+            // Update enemies
+            for (var i = enemies.length - 1; i >= 0; i--) {
+                var enemy = enemies[i];
+
+                // Move enemy along path
+                var targetX = path[enemy.pathIndex + 1].x * gridSize + gridSize / 2;
+                var targetY = path[enemy.pathIndex + 1].y * gridSize + gridSize / 2;
+                var dx = targetX - enemy.x;
+                var dy = targetY - enemy.y;
+                var distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < enemy.speed) {
+                    enemy.x = targetX;
+                    enemy.y = targetY;
+                    enemy.pathIndex++;
+                    if (enemy.pathIndex >= path.length - 1) {
+                        // Enemy reached the end
+                        enemies.splice(i, 1);
+                        lives--;
+                        if (lives <= 0) {
+                            alert("Game Over! You survived for " + elapsedTime + " seconds.");
+                            document.location.reload();
+                        }
+                        continue;
+                    }
+                } else {
+                    enemy.x += (dx / distance) * enemy.speed;
+                    enemy.y += (dy / distance) * enemy.speed;
+                }
+            }
+
+            // Update towers
+            for (var i = 0; i < towers.length; i++) {
+                var tower = towers[i];
+                if (now - tower.lastShotTime > tower.fireRate) {
+                    // Find the closest enemy in range
+                    var target = null;
+                    var minDistance = Infinity;
+                    for (var j = 0; j < enemies.length; j++) {
+                        var enemy = enemies[j];
+                        var dx = enemy.x - tower.x;
+                        var dy = enemy.y - tower.y;
+                        var distance = Math.sqrt(dx * dx + dy * dy);
+                        if (distance < tower.range && distance < minDistance) {
+                            minDistance = distance;
+                            target = enemy;
+                        }
+                    }
+                    if (target) {
+                        bullets.push({
+                            x: tower.x,
+                            y: tower.y,
+                            target: target,
+                            damage: tower.damage,
+                            type: tower.type // Store the tower type in the bullet
+                        });
+                        tower.lastShotTime = now;
+                    }
+                }
+            }
+
+            // Update bullets
+            for (var i = bullets.length - 1; i >= 0; i--) {
+                var bullet = bullets[i];
+                var dx = bullet.target.x - bullet.x;
+                var dy = bullet.target.y - bullet.y;
+                var distance = Math.sqrt(dx * dx + dy * dy);
+                var bulletSpeed = 4;
+                if (distance < bulletSpeed || bullet.target.health <= 0) {
+                    bullet.target.health -= bullet.damage;
+                    if (bullet.target.health <= 0) {
+                        var index = enemies.indexOf(bullet.target);
+                        if (index > -1) {
+                            enemies.splice(index, 1);
+                            money += 10;
+                        }
+                    }
+                    bullets.splice(i, 1);
+                } else {
+                    bullet.x += (dx / distance) * bulletSpeed;
+                    bullet.y += (dy / distance) * bulletSpeed;
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw grid
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 1;
+            for (var x = 0; x <= canvas.width; x += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(x, 0);
+                ctx.lineTo(x, canvas.height);
+                ctx.stroke();
+            }
+            for (var y = 0; y <= canvas.height; y += gridSize) {
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(canvas.width, y);
+                ctx.stroke();
+            }
+
+            // Draw path
+            ctx.strokeStyle = 'black';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(path[0].x * gridSize + gridSize / 2, path[0].y * gridSize + gridSize / 2);
+            for (var i = 1; i < path.length; i++) {
+                ctx.lineTo(path[i].x * gridSize + gridSize / 2, path[i].y * gridSize + gridSize / 2);
+            }
+            ctx.stroke();
+
+            // Draw towers
+            ctx.font = '20px Arial';
+            for (var i = 0; i < towers.length; i++) {
+                var tower = towers[i];
+                if (tower.type === 'basic') {
+                    ctx.fillStyle = 'blue';
+                    ctx.fillText('T', tower.x - 10, tower.y + 10);
+                } else if (tower.type === 'advanced') {
+                    ctx.fillStyle = 'green';
+                    ctx.fillText('A', tower.x - 10, tower.y + 10);
+                }
+            }
+
+            // Draw enemies
+            for (var i = 0; i < enemies.length; i++) {
+                var enemy = enemies[i];
+                ctx.fillStyle = 'red';
+                ctx.font = '20px Arial';
+                ctx.fillText('E', enemy.x - 10, enemy.y + 10);
+
+                // Draw enemy health bar
+                var healthBarWidth = 20;
+                var healthBarHeight = 4;
+                var healthPercent = enemy.health / enemy.maxHealth;
+                ctx.fillStyle = 'green';
+                ctx.fillRect(enemy.x - 10, enemy.y - 15, healthBarWidth * healthPercent, healthBarHeight);
+                ctx.strokeStyle = 'black';
+                ctx.strokeRect(enemy.x - 10, enemy.y - 15, healthBarWidth, healthBarHeight);
+            }
+
+            // Draw bullets
+            for (var i = 0; i < bullets.length; i++) {
+                var bullet = bullets[i];
+                if (bullet.type === 'basic') {
+                    ctx.fillStyle = 'black';
+                    ctx.font = '20px Arial';
+                    ctx.fillText('.', bullet.x, bullet.y);
+                } else if (bullet.type === 'advanced') {
+                    ctx.fillStyle = 'black';
+                    // Draw a larger circle for advanced bullets
+                    ctx.beginPath();
+                    ctx.arc(bullet.x, bullet.y, 5, 0, 2 * Math.PI);
+                    ctx.fill();
+                }
+            }
+
+            // Draw HUD
+            ctx.fillStyle = 'black';
+            ctx.font = '16px Arial';
+            ctx.fillText('Lives: ' + lives, 10, 20);
+            ctx.fillText('Money: ' + money, 10, 40);
+            ctx.fillText('Time: ' + elapsedTime + ' s', 10, 60);
+            ctx.fillText('Press 1: Basic Tower (50) | Press 2: Advanced Tower (100)', 10, 80);
+            ctx.fillText('Selected Tower: ' + (selectedTowerType === 'basic' ? 'Basic Tower' : 'Advanced Tower'), 10, 100);
+        }
+
+        canvas.addEventListener('click', function(e) {
+            var rect = canvas.getBoundingClientRect();
+            var x = e.clientX - rect.left;
+            var y = e.clientY - rect.top;
+
+            // Convert pixel coordinates to grid coordinates
+            var gridX = Math.floor(x / gridSize);
+            var gridY = Math.floor(y / gridSize);
+
+            // Check if the grid cell is empty and not part of the path
+            var cellOccupied = grid[gridX][gridY];
+            var isOnPath = false;
+            for (var i = 0; i < path.length; i++) {
+                if (path[i].x === gridX && path[i].y === gridY) {
+                    isOnPath = true;
+                    break;
+                }
+            }
+
+            if (!cellOccupied && !isOnPath) {
+                var towerCost = selectedTowerType === 'basic' ? 50 : 100;
+                if (money >= towerCost) {
+                    var tower = new Tower(gridX, gridY, selectedTowerType);
+                    towers.push(tower);
+                    grid[gridX][gridY] = tower;
+                    money -= towerCost;
+                } else {
+                    alert('Not enough money!');
+                }
+            } else {
+                alert('Cannot place a tower here!');
+            }
+        });
+
+        // Listen for key presses to change tower type
+        document.addEventListener('keydown', function(e) {
+            if (e.key === '1') {
+                selectedTowerType = 'basic';
+            } else if (e.key === '2') {
+                selectedTowerType = 'advanced';
+            }
+        });
+
+        gameLoop();
+    </script>
+</body>
+</html>
