@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Food Fight Wars Tower Defense – Grid Edition</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+      background: #eee;
+    }
+    #towerButtons {
+      text-align: center;
+      margin: 10px;
+    }
+    button {
+      margin: 5px;
+      padding: 10px 15px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    /* Hide the Replay button by default */
+    #replayButton {
+      display: none;
+    }
+    #gameCanvas {
+      background: #f0e68c; /* A picnic-table vibe! */
+      display: block;
+      margin: 0 auto;
+      border: 2px solid #333;
+    }
+  </style>
+</head>
+<body>
+  <div id="towerButtons">
+    <button id="burgerButton">Burger Tower ($50)</button>
+    <button id="pizzaButton">Pizza Tower ($100)</button>
+    <button id="hotdogButton">Hotdog Tower ($75)</button>
+    <!-- Cancel button to cancel tower placement -->
+    <button id="cancelButton">Cancel Tower Placement</button>
+  </div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <!-- Replay button (hidden until game over) -->
+  <div style="text-align: center; margin-top: 10px;">
+    <button id="replayButton">Replay</button>
+  </div>
+
+  <script>
+    // ======================
+    // AUDIO SETUP
+    // ======================
+    // Note: Replace these file names/paths with your own audio assets.
+    const towerPlaceSound = new Audio("tower_place.mp3");
+    const towerFireSound  = new Audio("tower_fire.mp3");
+    const enemyDeathSound = new Audio("enemy_death.mp3");
+    const bgMusic         = new Audio("background_music.mp3");
+    bgMusic.loop = true;
+    bgMusic.volume = 0.3;
+
+    // ======================
+    // GLOBAL VARIABLES & SETUP
+    // ======================
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // Grid settings:
+    const cellSize = 50;
+    const columns = canvas.width / cellSize;  // 16 columns for 800px wide
+    const rows = canvas.height / cellSize;      // 12 rows for 600px tall
+    // Object to track occupied grid cells (keyed as "col,row").
+    let occupiedCells = {};
+
+    // Game objects and states.
+    let towers = [];
+    let enemies = [];
+    let projectiles = [];
+    let selectedTowerType = null;
+    let enemySpawnTimer = 0;
+    const enemySpawnInterval = 1; // seconds between spawns within a wave
+    let money = 150;
+    let lives = 10;
+    let gameOver = false;
+
+    // Wave system.
+    let currentWave = 1;
+    let enemiesToSpawn = currentWave * 5; // e.g., wave 1 spawns 5 enemies, wave 2 spawns 10, etc.
+    let enemiesSpawned = 0;
+    let waveInProgress = true;
+    let waveDelayTimer = 0;
+    const waveDelay = 3; // seconds delay between waves
+
+    // When a tower is selected, show the grid overlay.
+    let showGrid = false;
+
+    // Returns the cost for a given tower type.
+    function getTowerCost(type) {
+      if (type === "burger") return 50;
+      if (type === "pizza") return 100;
+      if (type === "hotdog") return 75;
+      return 0;
+    }
+
+    // ======================
+    // DEFINE THE ENEMY PATH ON THE GRID
+    // ======================
+    // Define path cells (using grid coordinates: col and row).
+    const enemyPathCells = [
+      { col: 0, row: 6 },
+      { col: 4, row: 6 },
+      { col: 4, row: 2 },
+      { col: 12, row: 2 },
+      { col: 12, row: 8 },
+      { col: 15, row: 8 }
+    ];
+    // Convert grid cells to pixel coordinates (center of each cell).
+    const enemyPath = enemyPathCells.map(cell => {
+      return { x: cell.col * cellSize + cellSize / 2, y: cell.row * cellSize + cellSize / 2 };
+    });
+
+    // ======================
+    // TOWER CLASS
+    // ======================
+    class Tower {
+      constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.type = type; // "burger", "pizza", or "hotdog"
+        if (type === "burger") {
+          this.range = 100;
+          this.damage = 5;
+          this.fireRate = 1; // shots per second
+          this.cooldown = 0;
+        } else if (type === "pizza") {
+          this.range = 150;
+          this.damage = 10;
+          this.fireRate = 0.5; // slower firing rate
+          this.cooldown = 0;
+        } else if (type === "hotdog") {
+          this.range = 120;
+          this.damage = 3;
+          this.fireRate = 1.5;
+          this.cooldown = 0;
+        }
+      }
+
+      update(deltaTime) {
+        this.cooldown -= deltaTime;
+        if (this.cooldown <= 0) {
+          // Find the nearest enemy within range.
+          let target = null;
+          let minDist = Infinity;
+          for (let enemy of enemies) {
+            let dx = enemy.x - this.x;
+            let dy = enemy.y - this.y;
+            let dist = Math.hypot(dx, dy);
+            if (dist < this.range && dist < minDist) {
+              minDist = dist;
+              target = enemy;
+            }
+          }
+          if (target) {
+            projectiles.push(new Projectile(this.x, this.y, target, this.damage, this.type));
+            towerFireSound.currentTime = 0;
+            towerFireSound.play();
+            this.cooldown = 1 / this.fireRate;
+          }
+        }
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        if (this.type === "burger") {
+          // Layered burger tower.
+          ctx.fillStyle = "#d2a679";
+          ctx.beginPath();
+          ctx.ellipse(0, 10, 16, 8, 0, 0, Math.PI, false);
+          ctx.fill();
+          ctx.fillStyle = "#8b4513";
+          ctx.beginPath();
+          ctx.rect(-12, -5, 24, 15);
+          ctx.fill();
+          ctx.fillStyle = "green";
+          ctx.beginPath();
+          ctx.moveTo(-12, -5);
+          ctx.quadraticCurveTo(0, -15, 12, -5);
+          ctx.lineTo(12, -2);
+          ctx.quadraticCurveTo(0, -10, -12, -2);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = "#d2a679";
+          ctx.beginPath();
+          ctx.arc(0, -5, 16, Math.PI, 0);
+          ctx.fill();
+          ctx.strokeStyle = "#a67c52";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        } else if (this.type === "pizza") {
+          // Pizza tower.
+          ctx.fillStyle = "#f4a460";
+          ctx.beginPath();
+          ctx.arc(0, 0, 16, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#ffcc00";
+          ctx.beginPath();
+          ctx.arc(0, 0, 14, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "red";
+          [ {x: -5, y: -5}, {x: 6, y: -3}, {x: 0, y: 6} ].forEach(pos => {
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y, 3, 0, Math.PI * 2);
+            ctx.fill();
+          });
+          ctx.strokeStyle = "#cc8400";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        } else if (this.type === "hotdog") {
+          // Hotdog tower.
+          ctx.fillStyle = "#f5deb3";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 16, 8, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "#b22222";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 12, 6, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "yellow";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(-8, 0);
+          ctx.lineTo(8, 0);
+          ctx.stroke();
+          ctx.strokeStyle = "#a0522d";
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+    }
+
+    // ======================
+    // PROJECTILE CLASS
+    // ======================
+    class Projectile {
+      constructor(x, y, target, damage, towerType) {
+        this.x = x;
+        this.y = y;
+        this.target = target;
+        this.damage = damage;
+        this.towerType = towerType;
+        this.speed = 300; // pixels per second
+        this.radius = 5;
+        this.toDelete = false;
+      }
+
+      update(deltaTime) {
+        if (!this.target || this.target.isDead) {
+          this.toDelete = true;
+          return;
+        }
+        let dx = this.target.x - this.x;
+        let dy = this.target.y - this.y;
+        let dist = Math.hypot(dx, dy);
+        if (dist < 5) {
+          if (this.towerType === "hotdog") {
+            // Splash damage.
+            for (let enemy of enemies) {
+              let splashDist = Math.hypot(enemy.x - this.x, enemy.y - this.y);
+              if (splashDist < 30) {
+                enemy.health -= this.damage;
+              }
+            }
+          } else {
+            this.target.health -= this.damage;
+          }
+          this.toDelete = true;
+          return;
+        }
+        let velX = (dx / dist) * this.speed;
+        let velY = (dy / dist) * this.speed;
+        this.x += velX * deltaTime;
+        this.y += velY * deltaTime;
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        let gradient = ctx.createRadialGradient(0, 0, 1, 0, 0, this.radius);
+        if (this.towerType === "burger") {
+          gradient.addColorStop(0, "#8b4513");
+          gradient.addColorStop(1, "#d2a679");
+        } else if (this.towerType === "pizza") {
+          gradient.addColorStop(0, "#ff4500");
+          gradient.addColorStop(1, "#f4a460");
+        } else if (this.towerType === "hotdog") {
+          gradient.addColorStop(0, "#b22222");
+          gradient.addColorStop(1, "#f5deb3");
+        }
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    // ======================
+    // ENEMY CLASS
+    // ======================
+    class Enemy {
+      constructor(path, wave) {
+        this.path = path; // enemyPath (an array of pixel positions)
+        this.currentWaypoint = 0;
+        this.x = path[0].x;
+        this.y = path[0].y;
+        this.speed = 50; // pixels per second
+        // Increase health based on wave.
+        this.baseHealth = 20 + (wave - 1) * 10;
+        this.health = this.baseHealth;
+        this.radius = 12;
+        this.toDelete = false;
+        this.isDead = false;
+        this.rewardGiven = false;
+        this.wave = wave;
+        this.hasReachedEnd = false;
+      }
+
+      update(deltaTime) {
+        // Move strictly along the path.
+        while (deltaTime > 0 && this.currentWaypoint < this.path.length) {
+          let targetPoint = this.path[this.currentWaypoint];
+          let dx = targetPoint.x - this.x;
+          let dy = targetPoint.y - this.y;
+          let distance = Math.hypot(dx, dy);
+          let travelDistance = this.speed * deltaTime;
+          if (travelDistance >= distance) {
+            // Snap to the waypoint.
+            this.x = targetPoint.x;
+            this.y = targetPoint.y;
+            deltaTime -= distance / this.speed;
+            this.currentWaypoint++;
+          } else {
+            this.x += (dx / distance) * travelDistance;
+            this.y += (dy / distance) * travelDistance;
+            deltaTime = 0;
+          }
+        }
+        // If enemy has reached the end, subtract one life.
+        if (this.currentWaypoint >= this.path.length && !this.hasReachedEnd) {
+          lives--;
+          this.hasReachedEnd = true;
+          this.toDelete = true;
+          if (lives <= 0) {
+            gameOver = true;
+          }
+        }
+        // If enemy is killed.
+        if (this.health <= 0 && !this.isDead) {
+          if (!this.rewardGiven) {
+            money += 25;
+            enemyDeathSound.currentTime = 0;
+            enemyDeathSound.play();
+            this.rewardGiven = true;
+          }
+          this.isDead = true;
+          this.toDelete = true;
+        }
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        // Change appearance based on wave.
+        if (this.wave % 2 === 1) {
+          // Odd waves: Tomato-style enemy.
+          ctx.fillStyle = "#ff6347";
+          ctx.beginPath();
+          ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "white";
+          ctx.beginPath();
+          ctx.arc(-3, -2, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(3, -2, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "black";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, 2, 3, 0, Math.PI);
+          ctx.stroke();
+          ctx.fillStyle = "green";
+          ctx.beginPath();
+          ctx.moveTo(0, -this.radius);
+          ctx.lineTo(-4, -this.radius - 8);
+          ctx.lineTo(4, -this.radius - 8);
+          ctx.closePath();
+          ctx.fill();
+        } else {
+          // Even waves: Eggplant-style enemy.
+          ctx.fillStyle = "#9370DB";
+          ctx.beginPath();
+          ctx.ellipse(0, 0, this.radius, this.radius * 1.2, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = "white";
+          ctx.beginPath();
+          ctx.arc(-3, -2, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(3, -2, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = "black";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.arc(0, 2, 3, 0, Math.PI);
+          ctx.stroke();
+          ctx.fillStyle = "green";
+          ctx.beginPath();
+          ctx.moveTo(0, -this.radius);
+          ctx.lineTo(-4, -this.radius - 8);
+          ctx.lineTo(4, -this.radius - 8);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
+        // Health bar.
+        ctx.fillStyle = "red";
+        let healthWidth = (this.health / this.baseHealth) * 20;
+        ctx.fillRect(this.x - 10, this.y - this.radius - 15, healthWidth, 4);
+      }
+    }
+
+    // ======================
+    // TOWER SELECTION & GRID-BASED PLACEMENT
+    // ======================
+    document.getElementById("burgerButton").addEventListener("click", () => {
+      selectedTowerType = "burger";
+      showGrid = true;
+    });
+    document.getElementById("pizzaButton").addEventListener("click", () => {
+      selectedTowerType = "pizza";
+      showGrid = true;
+    });
+    document.getElementById("hotdogButton").addEventListener("click", () => {
+      selectedTowerType = "hotdog";
+      showGrid = true;
+    });
+    // Cancel tower placement.
+    document.getElementById("cancelButton").addEventListener("click", () => {
+      selectedTowerType = null;
+      showGrid = false;
+    });
+
+    // When the canvas is clicked during tower placement.
+    canvas.addEventListener("click", function(e) {
+      if (selectedTowerType && !gameOver) {
+        const rect = canvas.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+        // Snap click to grid cell.
+        const col = Math.floor(clickX / cellSize);
+        const row = Math.floor(clickY / cellSize);
+        const gridKey = `${col},${row}`;
+        if (occupiedCells[gridKey]) {
+          alert("That grid cell is already occupied!");
+          return;
+        }
+        let cost = getTowerCost(selectedTowerType);
+        if (money >= cost) {
+          money -= cost;
+          // Tower is placed at the center of the cell.
+          const towerX = col * cellSize + cellSize / 2;
+          const towerY = row * cellSize + cellSize / 2;
+          towers.push(new Tower(towerX, towerY, selectedTowerType));
+          occupiedCells[gridKey] = true;
+          selectedTowerType = null;
+          showGrid = false;
+          towerPlaceSound.currentTime = 0;
+          towerPlaceSound.play();
+          if (bgMusic.paused) {
+            bgMusic.play();
+          }
+        } else {
+          alert("Not enough money to build this tower!");
+        }
+      }
+    });
+
+    // ======================
+    // GRID DRAWING FUNCTION
+    // ======================
+    function drawGrid() {
+      ctx.save();
+      // Draw grid lines.
+      ctx.strokeStyle = "rgba(0, 0, 0, 0.3)";
+      for (let c = 0; c <= columns; c++) {
+        ctx.beginPath();
+        ctx.moveTo(c * cellSize, 0);
+        ctx.lineTo(c * cellSize, canvas.height);
+        ctx.stroke();
+      }
+      for (let r = 0; r <= rows; r++) {
+        ctx.beginPath();
+        ctx.moveTo(0, r * cellSize);
+        ctx.lineTo(canvas.width, r * cellSize);
+        ctx.stroke();
+      }
+      // Draw small circles at the center of each cell.
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < columns; c++) {
+          let cx = c * cellSize + cellSize / 2;
+          let cy = r * cellSize + cellSize / 2;
+          ctx.beginPath();
+          ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+          ctx.fillStyle = occupiedCells[`${c},${r}`] ? "rgba(255,0,0,0.5)" : "rgba(0,0,255,0.5)";
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // ======================
+    // GAME LOOP
+    // ======================
+    let lastTime = performance.now();
+    function gameLoop(time) {
+      let deltaTime = (time - lastTime) / 1000; // seconds
+      lastTime = time;
+      if (!gameOver) {
+        update(deltaTime);
+      }
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function update(deltaTime) {
+      towers.forEach(tower => tower.update(deltaTime));
+      enemies.forEach(enemy => enemy.update(deltaTime));
+      projectiles.forEach(proj => proj.update(deltaTime));
+
+      // --- Wave Enemy Spawning ---
+      if (waveInProgress && enemiesSpawned < enemiesToSpawn) {
+        enemySpawnTimer += deltaTime;
+        if (enemySpawnTimer >= enemySpawnInterval) {
+          enemies.push(new Enemy(enemyPath, currentWave));
+          enemiesSpawned++;
+          enemySpawnTimer = 0;
+        }
+      }
+      // If the wave is over (all enemies spawned and none remaining), start the delay for the next wave.
+      if (waveInProgress && enemiesSpawned === enemiesToSpawn && enemies.length === 0) {
+        waveInProgress = false;
+        waveDelayTimer = 0;
+      }
+      if (!waveInProgress) {
+        waveDelayTimer += deltaTime;
+        if (waveDelayTimer >= waveDelay) {
+          currentWave++;
+          enemiesToSpawn = currentWave * 5;
+          enemiesSpawned = 0;
+          waveInProgress = true;
+          enemySpawnTimer = 0;
+        }
+      }
+      // Remove objects flagged for deletion.
+      enemies = enemies.filter(enemy => !enemy.toDelete);
+      projectiles = projectiles.filter(proj => !proj.toDelete);
+    }
+
+    function draw() {
+      // Clear the canvas.
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f0e68c";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Optionally draw the grid overlay.
+      if (showGrid) {
+        drawGrid();
+      }
+
+      // Draw the enemy path (as a thick line on the grid).
+      ctx.save();
+      ctx.strokeStyle = "#8b4513";
+      ctx.lineWidth = 20;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(enemyPath[0].x, enemyPath[0].y);
+      for (let i = 1; i < enemyPath.length; i++) {
+        ctx.lineTo(enemyPath[i].x, enemyPath[i].y);
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Draw HUD: Money, Lives, and Wave.
+      ctx.fillStyle = "black";
+      ctx.font = "20px Arial";
+      ctx.fillText("Money: $" + money, 10, 30);
+      ctx.fillText("Lives: " + lives, 10, 55);
+      ctx.fillText("Wave: " + currentWave, 10, 80);
+
+      // Draw towers, enemies, and projectiles.
+      towers.forEach(tower => tower.draw(ctx));
+      enemies.forEach(enemy => enemy.draw(ctx));
+      projectiles.forEach(proj => proj.draw(ctx));
+
+      // Game Over screen.
+      if (gameOver) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.7)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "white";
+        ctx.font = "50px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2);
+        // Show the Replay button.
+        document.getElementById("replayButton").style.display = "block";
+      } else {
+        document.getElementById("replayButton").style.display = "none";
+      }
+    }
+
+    // Add event listener for the Replay button.
+    document.getElementById("replayButton").addEventListener("click", () => {
+      // For simplicity, reload the page to restart the game.
+      location.reload();
+    });
+
+    // Start the game loop.
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
