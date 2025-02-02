@@ -119,29 +119,77 @@
     });
 
     // ======================
-    // TOWER CLASS
+    // TOWER CLASS WITH UPGRADE SUPPORT
     // ======================
     class Tower {
       constructor(x, y, type) {
         this.x = x;
         this.y = y;
         this.type = type; // "burger", "pizza", or "hotdog"
+        this.level = 1;   // All towers start at level 1.
         if (type === "burger") {
           this.range = 100;
           this.damage = 5;
           this.fireRate = 1; // shots per second
-          this.cooldown = 0;
         } else if (type === "pizza") {
           this.range = 150;
           this.damage = 10;
           this.fireRate = 0.5; // slower firing rate
-          this.cooldown = 0;
         } else if (type === "hotdog") {
           this.range = 120;
           this.damage = 3;
           this.fireRate = 1.5;
-          this.cooldown = 0;
         }
+        this.cooldown = 0;
+      }
+
+      // Upgrade the tower to the next level (max level 3) and update its stats.
+      upgrade() {
+        if (this.level === 1) {
+          this.level = 2;
+          if (this.type === "burger") {
+            this.range = 120;
+            this.damage = 7;
+            this.fireRate = 1.2;
+          } else if (this.type === "pizza") {
+            this.range = 170;
+            this.damage = 14;
+            this.fireRate = 0.6;
+          } else if (this.type === "hotdog") {
+            this.range = 140;
+            this.damage = 4;
+            this.fireRate = 1.8;
+          }
+        } else if (this.level === 2) {
+          this.level = 3;
+          if (this.type === "burger") {
+            this.range = 140;
+            this.damage = 10;
+            this.fireRate = 1.5;
+          } else if (this.type === "pizza") {
+            this.range = 190;
+            this.damage = 18;
+            this.fireRate = 0.7;
+          } else if (this.type === "hotdog") {
+            this.range = 160;
+            this.damage = 5;
+            this.fireRate = 2.1;
+          }
+        }
+      }
+
+      // Returns the cost to upgrade this tower to the next level.
+      getUpgradeCost() {
+        if (this.level === 1) {
+          if (this.type === "burger") return 40;
+          if (this.type === "pizza") return 80;
+          if (this.type === "hotdog") return 60;
+        } else if (this.level === 2) {
+          if (this.type === "burger") return 60;
+          if (this.type === "pizza") return 120;
+          if (this.type === "hotdog") return 90;
+        }
+        return 0;
       }
 
       update(deltaTime) {
@@ -172,7 +220,7 @@
         ctx.save();
         ctx.translate(this.x, this.y);
         if (this.type === "burger") {
-          // Layered burger tower.
+          // Draw the basic burger tower.
           ctx.fillStyle = "#d2a679";
           ctx.beginPath();
           ctx.ellipse(0, 10, 16, 8, 0, 0, Math.PI, false);
@@ -197,7 +245,7 @@
           ctx.lineWidth = 1;
           ctx.stroke();
         } else if (this.type === "pizza") {
-          // Pizza tower.
+          // Draw the basic pizza tower.
           ctx.fillStyle = "#f4a460";
           ctx.beginPath();
           ctx.arc(0, 0, 16, 0, Math.PI * 2);
@@ -216,7 +264,7 @@
           ctx.lineWidth = 1;
           ctx.stroke();
         } else if (this.type === "hotdog") {
-          // Hotdog tower.
+          // Draw the basic hotdog tower.
           ctx.fillStyle = "#f5deb3";
           ctx.beginPath();
           ctx.ellipse(0, 0, 16, 8, 0, 0, Math.PI * 2);
@@ -235,6 +283,24 @@
           ctx.lineWidth = 1;
           ctx.stroke();
         }
+        
+        // Draw an extra "glow" to indicate an upgraded tower.
+        if (this.level > 1) {
+          ctx.globalAlpha = 0.5;
+          ctx.lineWidth = 4;
+          ctx.beginPath();
+          ctx.arc(0, 0, 25, 0, Math.PI * 2);
+          ctx.strokeStyle = this.level === 2 ? "gold" : "red";
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+        
+        // Draw the level text on the tower.
+        ctx.fillStyle = "black";
+        ctx.font = "10px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("Lv" + this.level, 0, 0);
+        
         ctx.restore();
       }
     }
@@ -432,7 +498,7 @@
     }
 
     // ======================
-    // TOWER SELECTION & GRID-BASED PLACEMENT
+    // TOWER SELECTION & GRID-BASED PLACEMENT / UPGRADE
     // ======================
     document.getElementById("burgerButton").addEventListener("click", () => {
       selectedTowerType = "burger";
@@ -452,12 +518,15 @@
       showGrid = false;
     });
 
-    // When the canvas is clicked during tower placement.
+    // When the canvas is clicked:
     canvas.addEventListener("click", function(e) {
-      if (selectedTowerType && !gameOver) {
-        const rect = canvas.getBoundingClientRect();
-        const clickX = e.clientX - rect.left;
-        const clickY = e.clientY - rect.top;
+      if (gameOver) return;
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+      
+      if (selectedTowerType) {
+        // --- TOWER PLACEMENT ---
         // Snap click to grid cell.
         const col = Math.floor(clickX / cellSize);
         const row = Math.floor(clickY / cellSize);
@@ -484,6 +553,32 @@
         } else {
           alert("Not enough money to build this tower!");
         }
+      } else {
+        // --- TOWER UPGRADE ---
+        // When not placing a tower, check if the click hit an existing tower.
+        let towerFound = false;
+        for (let tower of towers) {
+          let dx = clickX - tower.x;
+          let dy = clickY - tower.y;
+          if (Math.hypot(dx, dy) < cellSize / 2) { // click near the tower center
+            towerFound = true;
+            if (tower.level >= 3) {
+              alert("This tower is already at max level.");
+              break;
+            }
+            let upgradeCost = tower.getUpgradeCost();
+            if (money < upgradeCost) {
+              alert("Not enough money to upgrade this tower!");
+              break;
+            }
+            if (confirm("Upgrade this tower to level " + (tower.level + 1) + " for $" + upgradeCost + "?")) {
+              money -= upgradeCost;
+              tower.upgrade();
+            }
+            break;
+          }
+        }
+        // Optionally, you can add feedback if no tower was clicked.
       }
     });
 
