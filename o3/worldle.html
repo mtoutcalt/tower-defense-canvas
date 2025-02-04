@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Wordle Clone</title>
+  <style>
+    body {
+      background-color: #121213;
+      color: #ffffff;
+      font-family: Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 {
+      margin-bottom: 10px;
+    }
+    canvas {
+      background-color: #ffffff;
+      margin-top: 20px;
+    }
+    #message {
+      margin-top: 20px;
+      font-size: 24px;
+    }
+    #restartButton {
+      margin-top: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    /* On-screen keyboard styles */
+    #keyboard {
+      margin-top: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .keyboard-row {
+      display: flex;
+      margin-bottom: 8px;
+    }
+    .key {
+      margin: 0 3px;
+      padding: 10px 12px;
+      background-color: #d3d6da;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>Wordle Clone</h1>
+  <!-- Canvas for the Wordle board -->
+  <canvas id="gameCanvas"></canvas>
+  <!-- Message area -->
+  <div id="message"></div>
+  <!-- Restart button -->
+  <button id="restartButton">Restart</button>
+  
+  <!-- On-screen keyboard container -->
+  <div id="keyboard"></div>
+
+  <script>
+    // Get references to our HTML elements
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    const messageEl = document.getElementById("message");
+    const restartButton = document.getElementById("restartButton");
+    const keyboardDiv = document.getElementById("keyboard");
+
+    // Board settings
+    const rows = 6;
+    const cols = 5;
+    const cellSize = 60;
+    const margin = 10;
+    // Set canvas dimensions based on board size:
+    canvas.width = cols * (cellSize + margin) + margin;
+    canvas.height = rows * (cellSize + margin) + margin;
+
+    // Initialize an empty board (each cell holds { letter, color })
+    let board = [];
+    for (let r = 0; r < rows; r++) {
+      const rowArr = [];
+      for (let c = 0; c < cols; c++) {
+        rowArr.push({ letter: "", color: "" });
+      }
+      board.push(rowArr);
+    }
+
+    let currentRow = 0;
+    let currentCol = 0;
+    let gameOver = false;
+
+    // Create a list of 1000 valid five-letter words.
+    // We start with a base list of 26 words and repeat it until we have 1000.
+    const baseWords = [
+      "apple", "baker", "cider", "delta", "eagle", "fable", "gamer",
+      "honey", "ivory", "joker", "karma", "lemon", "mango", "night",
+      "ocean", "piano", "queen", "robot", "snake", "tiger", "umbra",
+      "vivid", "waltz", "xenon", "young", "zebra"
+    ];
+    let wordList = baseWords.slice();
+    while(wordList.length < 1000) {
+      wordList.push(baseWords[wordList.length % baseWords.length]);
+    }
+
+    // Pick a random solution word from the list and convert it to uppercase.
+    let answer = wordList[Math.floor(Math.random() * wordList.length)].toUpperCase();
+    // (For debugging, you can see the answer in the console.)
+    console.log("Answer (for debugging):", answer);
+
+    // Keyboard status: each letter maps to a status ("default", "gray", "yellow", or "green").
+    const keyboardStatus = {};
+    // Priority to decide when updating a key's color.
+    const statusPriority = { "default": 0, "gray": 1, "yellow": 2, "green": 3 };
+
+    // Layout for the on-screen keyboard.
+    const keyboardLayout = [
+      ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+      ["A", "S", "D", "F", "G", "H", "J", "K", "L"],
+      ["Enter", "Z", "X", "C", "V", "B", "N", "M", "Backspace"]
+    ];
+
+    // Create on-screen keyboard buttons dynamically.
+    function createKeyboard() {
+      keyboardDiv.innerHTML = "";
+      keyboardLayout.forEach(row => {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "keyboard-row";
+        row.forEach(key => {
+          const button = document.createElement("button");
+          button.className = "key";
+          button.textContent = key;
+          button.setAttribute("data-key", key);
+          button.addEventListener("click", () => handleOnScreenKey(key));
+          rowDiv.appendChild(button);
+        });
+        keyboardDiv.appendChild(rowDiv);
+      });
+    }
+
+    // Update the on-screen keyboard display based on keyboardStatus.
+    function updateKeyboardDisplay() {
+      const keys = document.querySelectorAll(".key");
+      keys.forEach(keyEl => {
+        const key = keyEl.getAttribute("data-key");
+        // Only update for single-letter keys.
+        if (key.length === 1 && /[A-Z]/.test(key)) {
+          const status = keyboardStatus[key] || "default";
+          if (status === "green") {
+            keyEl.style.backgroundColor = "#6aaa64";
+            keyEl.style.color = "#fff";
+          } else if (status === "yellow") {
+            keyEl.style.backgroundColor = "#c9b458";
+            keyEl.style.color = "#fff";
+          } else if (status === "gray") {
+            keyEl.style.backgroundColor = "#787c7e";
+            keyEl.style.color = "#fff";
+          } else {
+            keyEl.style.backgroundColor = "#d3d6da";
+            keyEl.style.color = "#000";
+          }
+        }
+      });
+    }
+
+    // Draw the board on the canvas.
+    function drawBoard() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const x = c * (cellSize + margin) + margin;
+          const y = r * (cellSize + margin) + margin;
+          const cell = board[r][c];
+          let fillColor = "#fff"; // default white
+
+          // Set fill color based on the cell's evaluation.
+          if (cell.color === "green") fillColor = "#6aaa64";
+          else if (cell.color === "yellow") fillColor = "#c9b458";
+          else if (cell.color === "gray") fillColor = "#787c7e";
+
+          ctx.fillStyle = fillColor;
+          ctx.fillRect(x, y, cellSize, cellSize);
+          ctx.strokeStyle = "#000";
+          ctx.strokeRect(x, y, cellSize, cellSize);
+
+          // Draw the letter (if any) in the center of the cell.
+          if (cell.letter) {
+            ctx.fillStyle = "#000";
+            ctx.font = "30px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(cell.letter, x + cellSize / 2, y + cellSize / 2);
+          }
+        }
+      }
+    }
+
+    // Display a message to the player.
+    function showMessage(msg) {
+      messageEl.textContent = msg;
+    }
+
+    // Update the keyboardStatus based on the evaluated guess.
+    function updateKeyboardStatus(guess, colors) {
+      for (let i = 0; i < guess.length; i++) {
+        const letter = guess[i];
+        const newStatus = colors[i];
+        const currentStatus = keyboardStatus[letter] || "default";
+        if (statusPriority[newStatus] > statusPriority[currentStatus]) {
+          keyboardStatus[letter] = newStatus;
+        }
+      }
+      updateKeyboardDisplay();
+    }
+
+    // Evaluate the current guess against the answer.
+    function evaluateGuess() {
+      const guess = board[currentRow].map(cell => cell.letter).join("");
+      if (guess.length !== cols) return;
+
+      // Prepare an array to hold the color for each letter.
+      let resultColors = new Array(cols).fill("gray");
+      // Create a mutable copy of the answer's letters.
+      let answerArray = answer.split("");
+
+      // First pass: mark correct letters in the correct positions (green).
+      for (let i = 0; i < cols; i++) {
+        if (guess[i] === answerArray[i]) {
+          resultColors[i] = "green";
+          answerArray[i] = null; // Mark this letter as used.
+        }
+      }
+
+      // Second pass: mark correct letters in the wrong positions (yellow).
+      for (let i = 0; i < cols; i++) {
+        if (resultColors[i] === "green") continue;
+        const index = answerArray.indexOf(guess[i]);
+        if (index !== -1) {
+          resultColors[i] = "yellow";
+          answerArray[index] = null;
+        }
+      }
+
+      // Save the result colors into the board.
+      for (let i = 0; i < cols; i++) {
+        board[currentRow][i].color = resultColors[i];
+      }
+
+      // Update the on-screen keyboard based on this guess.
+      updateKeyboardStatus(guess, resultColors);
+
+      drawBoard();
+
+      if (guess === answer) {
+        showMessage("Congratulations! You guessed the word!");
+        gameOver = true;
+      } else if (currentRow === rows - 1) {
+        showMessage("Game Over! The word was: " + answer);
+        gameOver = true;
+      } else {
+        // Move to the next row.
+        currentRow++;
+        currentCol = 0;
+      }
+    }
+
+    // Process a key input (from both physical and on-screen keyboards).
+    function processKey(key) {
+      if (gameOver) return;
+
+      if (key === "Enter") {
+        if (currentCol === cols) {
+          evaluateGuess();
+        }
+      } else if (key === "Backspace") {
+        if (currentCol > 0) {
+          currentCol--;
+          board[currentRow][currentCol].letter = "";
+          drawBoard();
+        }
+      } else if (/^[A-Z]$/.test(key)) {
+        if (currentCol < cols) {
+          board[currentRow][currentCol].letter = key;
+          currentCol++;
+          drawBoard();
+        }
+      }
+    }
+
+    // Handle on-screen key click.
+    function handleOnScreenKey(key) {
+      processKey(key);
+    }
+
+    // Listen for physical keyboard key presses.
+    document.addEventListener("keydown", function(e) {
+      let key = e.key;
+      if (key.length === 1 && /^[a-zA-Z]$/.test(key)) {
+        key = key.toUpperCase();
+      }
+      processKey(key);
+    });
+
+    // Restart the game by resetting variables.
+    restartButton.addEventListener("click", function() {
+      // Reset the board.
+      board = [];
+      for (let r = 0; r < rows; r++) {
+        const rowArr = [];
+        for (let c = 0; c < cols; c++) {
+          rowArr.push({ letter: "", color: "" });
+        }
+        board.push(rowArr);
+      }
+      currentRow = 0;
+      currentCol = 0;
+      gameOver = false;
+      // Reset keyboard status.
+      for (let letter in keyboardStatus) {
+        delete keyboardStatus[letter];
+      }
+      updateKeyboardDisplay();
+      // Pick a new answer.
+      answer = wordList[Math.floor(Math.random() * wordList.length)].toUpperCase();
+      showMessage("");
+      drawBoard();
+      console.log("New Answer (for debugging):", answer);
+    });
+
+    // Initialize the game.
+    createKeyboard();
+    drawBoard();
+  </script>
+</body>
+</html>
+
